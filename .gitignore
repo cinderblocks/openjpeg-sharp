@@ -16,3 +16,7 @@ scripts/opjstyle*
 
 # Ignore directories made by `make`.
 /bin/
+
+# Ignore MSVC garbage
+.vs/
+out/
