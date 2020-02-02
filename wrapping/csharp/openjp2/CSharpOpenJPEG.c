@@ -42,7 +42,6 @@ struct MarshalledImage
 {
     unsigned char* encoded;
     int length;
-    //int dummy; // padding for 64-bit alignment
 
     unsigned char* decoded;
     int width;
@@ -51,7 +50,7 @@ struct MarshalledImage
     int resolutions;
     int components;
     int packet_count;
-    opj_packet_info_t* packets;
+    opj_packet_info_t* packet_ptr;
 };
 
 // need to be 100% sure these are exported in the shared lib, so unique macro for dllexport
@@ -163,10 +162,10 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     bool retval = false;
     struct JPXData jpxdata;
     opj_cparameters_t cparameters;
-    OPJ_COLOR_SPACE color_space = OPJ_CLRSPC_SRGB;
-    opj_image_t* enc_img = NULL;
+    opj_image_t* enc_img;
     opj_codec_t* codec = NULL;
     opj_stream_t* stream = NULL;
+    OPJ_COLOR_SPACE color_space = OPJ_CLRSPC_SRGB;
 
     // initialize encoder params
     opj_set_default_encoder_parameters(&cparameters);
@@ -274,6 +273,8 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     opj_codec_t* codec;
     opj_stream_t* stream;
     opj_image_t* dec_img = NULL;
+    opj_codestream_info_v2_t* cs_info = NULL;
+    opj_codestream_index_t* cs_index = NULL;
 
     // initialize default decode params
     opj_set_default_decoder_parameters(&dparameters);
@@ -303,21 +304,26 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     // dec_image returns NULL if decode failed.
     if (dec_img == NULL) { goto cleanup; }
 
-    // maximum number of decompositions
-    //int max_numdecompos = 0;
-    //for (OPJ_UINT32 compno = 0; compno < dec_img->numcomps; ++compno)
-    //{
-    //    if (max_numdecompos < info.numdecompos[compno])
-    //        max_numdecompos = info.numdecompos[compno];
-    //}
+    cs_index = opj_get_cstr_index(codec);
+    if (!cs_index) { goto cleanup; }
 
+    // copy from image struct
     image->width = dec_img->x1 - dec_img->x0;
     image->height = dec_img->y1 - dec_img->y0;
-    //image->layers = info.numlayers;
-    //image->resolutions = max_numdecompos + 1;
     image->components = dec_img->numcomps;
-    //image->packet_count = info.packno;
-    //image->packets = info.tile->packet;
+
+    // copy from cs_index struct
+    image->packet_count = cs_index->nb_of_tiles;
+    image->packet_ptr = cs_index->tile_index->packet_index;
+
+    // copy from cs_info struct
+    cs_info = opj_get_cstr_info(codec);
+    if (cs_info)
+    {
+        image->layers = cs_info->m_default_tile_info.numlayers;
+        image->resolutions = cs_info->m_default_tile_info.tccp_info->numresolutions;
+    }
+    
     int imgsize = image->width * image->height;
 
     unsigned char* alloc = calloc(imgsize * image->components, sizeof(unsigned char));
