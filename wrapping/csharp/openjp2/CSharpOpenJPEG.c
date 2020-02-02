@@ -67,6 +67,22 @@ CS_DLLEXPORT void CS_freeImageAlloc(struct MarshalledImage* image);
 CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless);
 CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image);
 
+// error callbacks //
+static void error_callback(const char* msg, void* client_data)
+{
+    fprintf((FILE*)client_data, "CSharpOpenJpeg Error: %s", msg);
+}
+
+static void warning_callback(const char* msg, void* client_data)
+{
+    fprintf((FILE*)client_data, "CSharpOpenJpeg Warning: %s", msg);
+}
+
+static void info_callback(const char* msg, void* client_data)
+{
+    fprintf((FILE*)client_data, "CSharpOpenJpeg Info: %s", msg);
+}
+
 // Super magic excellent data stuffing struct //
 struct JPXData
 {
@@ -223,9 +239,9 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     
     // get an encoder handle and setup event handling local context
     codec = opj_create_compress(OPJ_CODEC_J2K);
-    //opj_set_error_handler(codec, error_callback, stderr);
-    //opj_set_warning_handler(codec, warning_callback, stderr);
-    //opj_set_info_handler(codec, info_callback, stderr);
+    opj_set_error_handler(codec, error_callback, stderr);
+    opj_set_warning_handler(codec, warning_callback, stderr);
+    opj_set_info_handler(codec, info_callback, stdout);
 
     // setup the encoder parameters using the current image and user params
     opj_setup_encoder(codec, &cparameters, enc_img);
@@ -281,9 +297,9 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
 
     // get a decoder handle and setup event handling local context
     codec = opj_create_decompress(OPJ_CODEC_J2K);
-    //opj_set_error_handler(codec, error_callback, stderr);
-    //opj_set_warning_handler(codec, warning_callback, stderr);
-    //opj_set_info_handler(codec, info_callback, stderr);
+    opj_set_error_handler(codec, error_callback, stderr);
+    opj_set_warning_handler(codec, warning_callback, stderr);
+    opj_set_info_handler(codec, info_callback, stdout);
 
     // setup decoder
     opj_setup_decoder(codec, &dparameters);
