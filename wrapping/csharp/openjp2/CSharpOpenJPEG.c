@@ -176,7 +176,6 @@ CS_DLLEXPORT void CS_freeImageAlloc(struct MarshalledImage* image)
 CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
 {
     bool retval = false;
-    struct JPXData jpxdata;
     opj_cparameters_t cparameters;
     opj_image_t* enc_img;
     opj_codec_t* codec = NULL;
@@ -250,7 +249,11 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     stream = opj_stream_default_create(OPJ_STREAM_WRITE);
     if (!stream) { goto cleanup; }
 
+    struct JPXData jpxdata;
     memset(&jpxdata, 0, sizeof(struct JPXData));
+    jpxdata.data = image->decoded;
+    jpxdata.size = image->length;
+
     opj_stream_set_user_data(stream, &jpxdata, NULL);
     opj_stream_set_write_function(stream, jpxWrite_callback);
     opj_stream_set_skip_function(stream, jpxSkip_callback);
@@ -284,7 +287,6 @@ cleanup:
 CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
 {
     bool retval = false;
-    struct JPXData jpxdata;
     opj_dparameters_t dparameters;
     opj_codec_t* codec;
     opj_stream_t* stream;
@@ -305,10 +307,14 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     opj_setup_decoder(codec, &dparameters);
 
     // open and initialize a bytestream
-    stream = opj_stream_default_create(OPJ_STREAM_WRITE);
+    stream = opj_stream_default_create(OPJ_STREAM_READ);
     if (!stream) { goto cleanup; }
 
+    struct JPXData jpxdata;
     memset(&jpxdata, 0, sizeof(struct JPXData));
+    jpxdata.data = image->encoded;
+    jpxdata.size = image->length;
+
     opj_stream_set_user_data(stream, &jpxdata, NULL);
     opj_stream_set_read_function(stream, jpxRead_callback);
     opj_stream_set_skip_function(stream, jpxSkip_callback);
