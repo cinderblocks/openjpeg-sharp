@@ -1,41 +1,51 @@
 version: 2.3.1.{build}
 branches:
-  except:
-  - coverity_scan
+  only:
+  - SeeSharp
 skip_tags: false
 clone_depth: 50
+test: off
+
+image:
+  - Visual Studio 2013
+  - Ubuntu
+  - Ubuntu1604
+  - macos
+
+configuration:
+  - Release
+
 environment:
   matrix:
-  - OPJ_CI_ARCH: x64
-    OPJ_CI_VSCOMNTOOLS: $(VS140COMNTOOLS)
-    OPJ_CI_INSTRUCTION_SETS: "/arch:AVX2"
-  - OPJ_CI_ARCH: x86
-    OPJ_CI_VSCOMNTOOLS: $(VS140COMNTOOLS)
-    OPJ_CI_INCLUDE_IF_DEPLOY: 1
-  - OPJ_CI_ARCH: x64
-    OPJ_CI_VSCOMNTOOLS: $(VS140COMNTOOLS)
-    OPJ_CI_INCLUDE_IF_DEPLOY: 1
-  - OPJ_CI_ARCH: x86
-    OPJ_CI_VSCOMNTOOLS: $(VS100COMNTOOLS)
-install:
-- cmd: c:\cygwin\bin\bash ./tools/travis-ci/install.sh
-build_script:
-- cmd: >-
-    "%OPJ_CI_VSCOMNTOOLS%..\..\VC\vcvarsall.bat" %OPJ_CI_ARCH%
+  - platform: x86
+    BUILD_PLATFORM: Win32
+    OPJ_CI_ARCH: x86
+  - platform: x64
+    BUILD_PLATFORM: x64
+    OPJ_CI_ARCH: x64
 
-    bash ./tools/travis-ci/run.sh
-test: off
-#before_deploy:
-#- cmd: c:\cygwin\bin\bash ./tools/travis-ci/before_deploy.sh
-deploy:
-  #release: openjpeg-$(appveyor_repo_tag_name)
-  description: 'OpenJPEG $(appveyor_repo_tag_name) has been released. More info [here](https://github.com/uclouvain/openjpeg/blob/$(appveyor_repo_tag_name)/NEWS) and a detailed view [here](https://github.com/uclouvain/openjpeg/blob/$(appveyor_repo_tag_name)/CHANGES).'
-  provider: GitHub
-  auth_token:
-    secure: XUL+IoRRw8U/4tupa/fMpinxurft7WRQHZiWHMLO5iuFbwZ+C3vCjVVVM+5Ebky7 # your encrypted token from GitHub
-  artifact: /.*\.zip/            # upload all zip packages to release assets
-  draft: true
-  prerelease: false
-  on:
-    appveyor_repo_tag: true        # deploy on tag push only
-    OPJ_CI_INCLUDE_IF_DEPLOY: 1
+before_build:
+  - cmd: mkdir build && cd build
+  - cmd: cmake ../ -DCMAKE_BUILD_TYPE=%CONFIGURATION% -A %BUILD_PLATFORM% -DBUILD_CSHARP=ON
+  - sh: mkdir build && cd build
+  - sh: cmake ../ -DCMAKE_BUILD_TYPE=$CONFIGURATION -DBUILD_CSHARP=ON
+
+build_script:
+  - cmd: cmake --build . --config %CONFIGURATION%
+  - sh: cmake --build . --config $CONFIGURATION
+
+artifacts:
+  - path: build/bin/Release/*.dll
+    name: Windows dynamic libraries
+
+  - path: build/bin/Release/*.lib
+    name: Windows static libraries
+
+  - path: build/bin/*.so*
+    name: Linux dynamic libs
+
+  - path: build/bin/*.a
+    name: Static libs
+
+  - path: build/bin/*.dylib
+    name: MacOS dynamic libs
