@@ -28,7 +28,13 @@
             "buildCommandArgs": "-v",
             "ctestCommandArgs": "",
             "inheritEnvironments": [ "msvc_x64_x64" ],
-            "variables": []
+            "variables": [
+                {
+                    "name": "BUILD_CSHARP",
+                    "value": "True",
+                    "type": "BOOL"
+                }
+            ]
         },
         {
             "name": "x86-Debug",
