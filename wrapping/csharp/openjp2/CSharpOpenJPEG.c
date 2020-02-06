@@ -42,6 +42,7 @@ struct MarshalledImage
 {
     unsigned char* encoded;
     int length;
+    int pos;
 
     unsigned char* decoded;
     int width;
@@ -84,52 +85,74 @@ static void info_callback(const char* msg, void* client_data)
 }
 
 // Super magic excellent data stuffing struct //
-struct JPXData
+typedef struct opj_buffer_info
 {
     unsigned char* data;
     OPJ_SIZE_T size;
     OPJ_OFF_T pos;
-};
+} opj_buffer_info_t;
 
-static OPJ_SIZE_T jpxRead_callback(void* p_buffer, OPJ_SIZE_T p_nb_bytes, void* p_user_data)
+static OPJ_SIZE_T read_callback(void* p_buffer, OPJ_SIZE_T p_nb_bytes, void* p_user_data)
 {
-    struct JPXData* jpxData = (struct JPXData*)p_user_data;
-    OPJ_SIZE_T len = jpxData->size - jpxData->pos;
+    opj_buffer_info_t* buffer = (opj_buffer_info_t*)p_user_data;
+    OPJ_SIZE_T len = buffer->size - buffer->pos;
     if (len < 0) { len = 0; }
     if (len == 0) { return (OPJ_SIZE_T)-1; }  /* End of file! */
     if ((OPJ_SIZE_T)len > p_nb_bytes) { len = p_nb_bytes; }
-    memcpy(p_buffer, jpxData->data + jpxData->pos, len);
-    jpxData->pos += len;
+    memcpy(p_buffer, buffer->data + buffer->pos, len);
+    buffer->pos += len;
     return len;
 }
 
-static OPJ_SIZE_T jpxWrite_callback(void* p_buffer, OPJ_SIZE_T p_nb_bytes, void* p_user_data)
+static OPJ_SIZE_T write_callback(void* p_buffer, OPJ_SIZE_T p_nb_bytes, void* p_user_data)
 {
-    struct JPXData* jpxData = (struct JPXData*)p_user_data;
+    opj_buffer_info_t* buffer = (opj_buffer_info_t*)p_user_data;
     OPJ_SIZE_T nb_bytes_write = p_nb_bytes;
-    if ((OPJ_SIZE_T)jpxData->pos >= jpxData->size) { return (OPJ_SIZE_T)-1; }
-    if (p_nb_bytes > jpxData->size - jpxData->pos) {
-        nb_bytes_write = jpxData->size - jpxData->pos;
+    if ((OPJ_SIZE_T)buffer->pos >= buffer->size) { return (OPJ_SIZE_T)-1; }
+    if (p_nb_bytes > buffer->size - buffer->pos) {
+        nb_bytes_write = buffer->size - buffer->pos;
     }
-    memcpy(&(jpxData->data[jpxData->pos]), p_buffer, nb_bytes_write);
-    jpxData->pos += nb_bytes_write;
+    memcpy(&(buffer->data[buffer->pos]), p_buffer, nb_bytes_write);
+    buffer->pos += nb_bytes_write;
     return nb_bytes_write;
 }
 
-static OPJ_OFF_T jpxSkip_callback(OPJ_OFF_T skip, void* p_user_data)
+static OPJ_OFF_T skip_callback(OPJ_OFF_T skip, void* p_user_data)
 {
-    struct JPXData* jpxData = (struct JPXData*)p_user_data;
-    jpxData->pos += skip > (OPJ_OFF_T)(jpxData->size - jpxData->pos) ? jpxData->size - jpxData->pos : skip;
+    opj_buffer_info_t* buffer = (opj_buffer_info_t*)p_user_data;
+    buffer->pos += skip > (OPJ_OFF_T)(buffer->size - buffer->pos) 
+        ? buffer->size - buffer->pos : skip;
     // Always return input value to avoid "Problem with skipping JPEG2000 box, stream error"
     return skip;
 }
 
-static OPJ_BOOL jpxSeek_callback(OPJ_OFF_T seek_pos, void* p_user_data)
+static OPJ_BOOL seek_callback(OPJ_OFF_T seek_pos, void* p_user_data)
 {
-    struct JPXData* jpxData = (struct JPXData*)p_user_data;
-    if (seek_pos > (OPJ_OFF_T)jpxData->size) { return OPJ_FALSE; }
-    jpxData->pos = seek_pos;
+    opj_buffer_info_t* buffer = (opj_buffer_info_t*)p_user_data;
+    if (seek_pos > (OPJ_OFF_T)buffer->size) { return OPJ_FALSE; }
+    buffer->pos = seek_pos;
     return OPJ_TRUE;
+}
+
+static opj_stream_t* create_buffer_stream(opj_buffer_info_t* p_buffer, OPJ_BOOL input)
+{
+    if (!p_buffer) { return NULL; }
+
+    opj_stream_t* p_stream = opj_stream_default_create(input);
+    if (!p_stream) { return NULL; }
+
+    opj_stream_set_user_data(p_stream, p_buffer, NULL);
+    opj_stream_set_user_data_length(p_stream, p_buffer->size);
+
+    if (input) {
+        opj_stream_set_read_function(p_stream, read_callback);
+    } else {
+        opj_stream_set_write_function(p_stream, write_callback);
+    }
+    opj_stream_set_skip_function(p_stream, skip_callback);
+    opj_stream_set_seek_function(p_stream, seek_callback);
+
+    return p_stream;
 }
 
 // Public API Meat //
@@ -240,24 +263,19 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     codec = opj_create_compress(OPJ_CODEC_J2K);
     opj_set_error_handler(codec, error_callback, stderr);
     opj_set_warning_handler(codec, warning_callback, stderr);
-    opj_set_info_handler(codec, info_callback, stdout);
+    //opj_set_info_handler(codec, info_callback, stderr);
 
     // setup the encoder parameters using the current image and user params
     opj_setup_encoder(codec, &cparameters, enc_img);
 
     // open and initialize a bytestream
-    stream = opj_stream_default_create(OPJ_STREAM_WRITE);
+    opj_buffer_info_t buffer;
+    buffer.pos = 0;
+    buffer.data = image->decoded;
+    buffer.size = image->length;
+    stream = create_buffer_stream(&buffer, OPJ_STREAM_WRITE);
+    
     if (!stream) { goto cleanup; }
-
-    struct JPXData jpxdata;
-    memset(&jpxdata, 0, sizeof(struct JPXData));
-    jpxdata.data = image->decoded;
-    jpxdata.size = image->length;
-
-    opj_stream_set_user_data(stream, &jpxdata, NULL);
-    opj_stream_set_write_function(stream, jpxWrite_callback);
-    opj_stream_set_skip_function(stream, jpxSkip_callback);
-    opj_stream_set_seek_function(stream, jpxSeek_callback);
 
     // encode the image
     OPJ_BOOL res = opj_start_compress(codec, enc_img, stream);
@@ -265,13 +283,13 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     res = res && opj_end_compress(codec, stream);
     if (!res) { goto cleanup; }
 
-    image->length = (int)jpxdata.size;
+    image->length = (int)buffer.size;
 
-    unsigned char* alloc = calloc(image->length, sizeof(unsigned char));
+    unsigned char* alloc = calloc(buffer.size, sizeof(unsigned char));
     if (!alloc) { goto cleanup; }
 
     image->encoded = alloc;
-    memcpy(image->encoded, jpxdata.data, image->length);
+    memcpy(image->encoded, buffer.data, buffer.size);
     free(alloc);
 
     retval = true;
@@ -301,27 +319,32 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     codec = opj_create_decompress(OPJ_CODEC_J2K);
     opj_set_error_handler(codec, error_callback, stderr);
     opj_set_warning_handler(codec, warning_callback, stderr);
-    opj_set_info_handler(codec, info_callback, stdout);
+    //opj_set_info_handler(codec, info_callback, stderr);
 
     // setup decoder
     opj_setup_decoder(codec, &dparameters);
 
     // open and initialize a bytestream
-    stream = opj_stream_default_create(OPJ_STREAM_READ);
+    opj_buffer_info_t buffer;
+    memset(&buffer, 0, sizeof(opj_buffer_info_t));
+    buffer.pos = 0;
+    buffer.data = image->encoded;
+    buffer.size = image->length;
+
+    stream = create_buffer_stream(&buffer, OPJ_STREAM_READ);
     if (!stream) { goto cleanup; }
 
-    struct JPXData jpxdata;
-    memset(&jpxdata, 0, sizeof(struct JPXData));
-    jpxdata.data = image->encoded;
-    jpxdata.size = image->length;
-
-    opj_stream_set_user_data(stream, &jpxdata, NULL);
-    opj_stream_set_read_function(stream, jpxRead_callback);
-    opj_stream_set_skip_function(stream, jpxSkip_callback);
-    opj_stream_set_seek_function(stream, jpxSeek_callback);
-
-    if (!opj_read_header(stream, codec, &dec_img)) { goto cleanup; }
-    if (!opj_decode(codec, stream, dec_img)) { goto cleanup; }
+    if (!(opj_read_header(stream, codec, &dec_img) // read in header
+        && opj_set_decode_area(codec, dec_img, dparameters.DA_x0, // set full image decode
+            dparameters.DA_y0, dparameters.DA_x1, dparameters.DA_y1))) 
+    {
+        goto cleanup;
+    }
+    if (!(opj_decode(codec, stream, dec_img) // decode
+        && opj_end_decompress(codec, stream))) //finalize
+    {
+        goto cleanup; 
+    }
 
     // dec_image returns NULL if decode failed.
     if (dec_img == NULL) { goto cleanup; }
@@ -345,16 +368,15 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
         image->layers = cs_info->m_default_tile_info.numlayers;
         image->resolutions = cs_info->m_default_tile_info.tccp_info->numresolutions;
     }
-    
     int imgsize = image->width * image->height;
 
     unsigned char* alloc = calloc(imgsize * image->components, sizeof(unsigned char));
     if (!alloc) { return false; }
 
+    image->decoded = alloc;
     for (int i = 0; i < image->components; ++i) {
         memcpy(image->decoded + i * imgsize, dec_img->comps[i].data, imgsize);
     }
-
     retval = true;
 
 cleanup:
