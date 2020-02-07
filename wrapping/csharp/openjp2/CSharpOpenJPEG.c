@@ -42,16 +42,11 @@ struct MarshalledImage
 {
     unsigned char* encoded;
     int length;
-    int pos;
 
     unsigned char* decoded;
     int width;
     int height;
-    int layers;
-    int resolutions;
     int components;
-    int packet_count;
-    opj_packet_info_t* packet_ptr;
 };
 
 // need to be 100% sure these are exported in the shared lib, so unique macro for dllexport
@@ -112,7 +107,7 @@ static OPJ_SIZE_T write_callback(void* p_buffer, OPJ_SIZE_T p_nb_bytes, void* p_
     if (p_nb_bytes > buffer->size - buffer->pos) {
         nb_bytes_write = buffer->size - buffer->pos;
     }
-    memcpy(&(buffer->data[buffer->pos]), p_buffer, nb_bytes_write);
+    memcpy(&buffer->data[buffer->pos], p_buffer, nb_bytes_write);
     buffer->pos += nb_bytes_write;
     return nb_bytes_write;
 }
@@ -160,10 +155,9 @@ CS_DLLEXPORT bool CS_allocEncoded(struct MarshalledImage* image)
 {
     CS_freeImageAlloc(image);
 
-    unsigned char* alloc = calloc(image->length, sizeof(unsigned char));
-    if (!alloc) { return false; }
+    image->encoded = calloc(image->length, sizeof(unsigned char));
+    if (!image->encoded) { return false; }
 
-    image->encoded = alloc;
     image->decoded = NULL;
 
     return true;
@@ -173,10 +167,9 @@ CS_DLLEXPORT bool CS_allocDecoded(struct MarshalledImage* image)
 {
     CS_freeImageAlloc(image);
 
-    unsigned char* alloc = calloc(image->length, sizeof(unsigned char));
-    if (!alloc) { return false; }
+    image->decoded = calloc(image->length, sizeof(unsigned char));
+    if (!image->decoded) { return false; }
 
-    image->decoded = alloc;
     image->encoded = NULL;
 
     return true;
@@ -349,33 +342,28 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     // dec_image returns NULL if decode failed.
     if (dec_img == NULL) { goto cleanup; }
 
+    // if we've got no components, something went wrong
+    if (&dec_img->comps[0] == NULL) { goto cleanup; }
+
     cs_index = opj_get_cstr_index(codec);
     if (!cs_index) { goto cleanup; }
 
-    // copy from image struct
-    image->width = dec_img->x1 - dec_img->x0;
-    image->height = dec_img->y1 - dec_img->y0;
-    image->components = dec_img->numcomps;
+    // initialize decoded image struct
+    const OPJ_UINT32 components = dec_img->numcomps;
+    const OPJ_UINT32 width = dec_img->x1 - dec_img->x0;
+    const OPJ_UINT32 height = dec_img->y1 - dec_img->y0;
+    const OPJ_UINT32 pixels = width * height;
 
-    // copy from cs_index struct
-    image->packet_count = cs_index->nb_of_tiles;
-    image->packet_ptr = cs_index->tile_index->packet_index;
+    image->components = components;
+    image->width = width;
+    image->height = height;
 
-    // copy from cs_info struct
-    cs_info = opj_get_cstr_info(codec);
-    if (cs_info)
+    image->decoded = calloc((size_t)components * pixels, sizeof(OPJ_INT32));
+    if (!image->decoded) { goto cleanup; }
+
+    for (OPJ_UINT32 comp = 0; comp < components; ++comp)
     {
-        image->layers = cs_info->m_default_tile_info.numlayers;
-        image->resolutions = cs_info->m_default_tile_info.tccp_info->numresolutions;
-    }
-    int imgsize = image->width * image->height;
-
-    unsigned char* alloc = calloc(imgsize * image->components, sizeof(unsigned char));
-    if (!alloc) { return false; }
-
-    image->decoded = alloc;
-    for (int i = 0; i < image->components; ++i) {
-        memcpy(image->decoded + i * imgsize, dec_img->comps[i].data, imgsize);
+        memcpy(&image->decoded[comp * pixels], dec_img->comps[comp].data, pixels);
     }
     retval = true;
 
