@@ -4711,6 +4711,7 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
     opj_tcp_t * l_tcp = 00;
     OPJ_UINT32 * l_tile_len = 00;
     OPJ_BOOL l_sot_length_pb_detected = OPJ_FALSE;
+    OPJ_BOOL truncated = OPJ_FALSE;
 
     /* preconditions */
     assert(p_j2k != 00);
@@ -4744,9 +4745,10 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
         /* Check enough bytes left in stream before allocation */
         if ((OPJ_OFF_T)p_j2k->m_specific_param.m_decoder.m_sot_length >
                 opj_stream_get_number_byte_left(p_stream)) {
-            opj_event_msg(p_manager, EVT_ERROR,
-                          "Tile part length size inconsistent with stream length\n");
-            return OPJ_FALSE;
+            //opj_event_msg(p_manager, EVT_ERROR,
+            //              "Tile part length size inconsistent with stream length\n");
+            //return OPJ_FALSE;
+            truncated = OPJ_TRUE;
         }
         if (p_j2k->m_specific_param.m_decoder.m_sot_length >
                 UINT_MAX - OPJ_COMMON_CBLK_DATA_EXTRA) {
@@ -4762,8 +4764,9 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
             /* LH: oddly enough, in this path, l_tile_len!=0.
              * TODO: If this was consistent, we could simplify the code to only use realloc(), as realloc(0,...) default to malloc(0,...).
              */
-            *l_current_data = (OPJ_BYTE*) opj_malloc(
-                                  p_j2k->m_specific_param.m_decoder.m_sot_length + OPJ_COMMON_CBLK_DATA_EXTRA);
+            *l_current_data = (!truncated) 
+                ? (OPJ_BYTE*)opj_malloc(p_j2k->m_specific_param.m_decoder.m_sot_length + OPJ_COMMON_CBLK_DATA_EXTRA)
+                : (OPJ_BYTE*)opj_malloc(opj_stream_get_number_byte_left(p_stream) + OPJ_COMMON_CBLK_DATA_EXTRA);
         } else {
             OPJ_BYTE *l_new_current_data;
             if (*l_tile_len > UINT_MAX - OPJ_COMMON_CBLK_DATA_EXTRA -
@@ -4774,9 +4777,13 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
                 return OPJ_FALSE;
             }
 
-            l_new_current_data = (OPJ_BYTE *) opj_realloc(*l_current_data,
-                                 *l_tile_len + p_j2k->m_specific_param.m_decoder.m_sot_length +
-                                 OPJ_COMMON_CBLK_DATA_EXTRA);
+            l_new_current_data = (!truncated)
+                ? (OPJ_BYTE*)opj_realloc(*l_current_data,
+                    *l_tile_len + p_j2k->m_specific_param.m_decoder.m_sot_length 
+                    + OPJ_COMMON_CBLK_DATA_EXTRA)
+                : (OPJ_BYTE*)opj_realloc(*l_current_data,
+                    *l_tile_len + opj_stream_get_number_byte_left(p_stream)
+                    + OPJ_COMMON_CBLK_DATA_EXTRA);
             if (! l_new_current_data) {
                 opj_free(*l_current_data);
                 /*nothing more is done as l_current_data will be set to null, and just
@@ -4832,7 +4839,7 @@ static OPJ_BOOL opj_j2k_read_sod(opj_j2k_t *p_j2k,
         l_current_read_size = 0;
     }
 
-    if (l_current_read_size != p_j2k->m_specific_param.m_decoder.m_sot_length) {
+    if (l_current_read_size != p_j2k->m_specific_param.m_decoder.m_sot_length || truncated == OPJ_TRUE) {
         p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_NEOC;
     } else {
         p_j2k->m_specific_param.m_decoder.m_state = J2K_STATE_TPHSOT;
