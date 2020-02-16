@@ -38,16 +38,25 @@
 #include <string.h>
 #include "openjpeg.h"
 
-struct MarshalledImage
+#if defined(_MSC_VER)
+#define ALIGNED_(x) __declspec(align(x))
+#else
+#if defined(__GNUC__)
+#define ALIGNED_(x) __attribute__ ((aligned(x)))
+#endif
+#endif
+
+#define _ALIGNED_TYPE(t,x) typedef t ALIGNED_(x)
+
+typedef struct ALIGNED_(8) marshaled_j2k_image
 {
-    unsigned char* encoded;
+    unsigned char* data;
     int length;
 
-    unsigned char* decoded;
     int width;
     int height;
     int components;
-};
+} MarshaledJ2KImage;
 
 // need to be 100% sure these are exported in the shared lib, so unique macro for dllexport
 #ifdef WIN32
@@ -56,27 +65,35 @@ struct MarshalledImage
 #  define CS_DLLEXPORT
 #endif
 
-CS_DLLEXPORT bool CS_allocEncoded(struct MarshalledImage* image);
-CS_DLLEXPORT bool CS_allocDecoded(struct MarshalledImage* image);
-CS_DLLEXPORT void CS_freeImageAlloc(struct MarshalledImage* image);
+CS_DLLEXPORT bool CS_allocJ2KImage(MarshaledJ2KImage* img, int length);
+CS_DLLEXPORT void CS_freeJ2KImage(MarshaledJ2KImage* img);
 
-CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless);
-CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image);
+CS_DLLEXPORT bool CS_encodeJ2KImage(MarshaledJ2KImage* source, bool lossless, unsigned char* dest, int* dest_len);
+CS_DLLEXPORT bool CS_decodeJ2KImage(unsigned char* source, int source_len, MarshaledJ2KImage* dest);
+
+// from opj_intmath.h
+static INLINE OPJ_INT32 cs_ceildivpow2(OPJ_INT32 a, OPJ_INT32 b)
+{
+    return (OPJ_INT32)((a + ((OPJ_INT64)1 << b) - 1) >> b);
+}
 
 // error callbacks //
 static void error_callback(const char* msg, void* client_data)
 {
     fprintf((FILE*)client_data, "CSharpOpenJpeg Error: %s", msg);
+    fflush((FILE*)client_data);
 }
 
 static void warning_callback(const char* msg, void* client_data)
 {
     fprintf((FILE*)client_data, "CSharpOpenJpeg Warning: %s", msg);
+    fflush((FILE*)client_data);
 }
 
 static void info_callback(const char* msg, void* client_data)
 {
     fprintf((FILE*)client_data, "CSharpOpenJpeg Info: %s", msg);
+    fflush((FILE*)client_data);
 }
 
 // Super magic excellent data stuffing struct //
@@ -151,45 +168,28 @@ static opj_stream_t* create_buffer_stream(opj_buffer_info_t* p_buffer, OPJ_BOOL 
 }
 
 // Public API Meat //
-CS_DLLEXPORT bool CS_allocEncoded(struct MarshalledImage* image)
+CS_DLLEXPORT bool CS_allocJ2KImage(MarshaledJ2KImage* img, int length)
 {
-    CS_freeImageAlloc(image);
+    CS_freeJ2KImage(img);
 
-    image->encoded = calloc(image->length, sizeof(unsigned char));
-    if (!image->encoded) { return false; }
-
-    image->decoded = NULL;
-
-    return true;
+    img->length = length;
+    img->data = calloc(length, sizeof(unsigned char));
+    return (img->data);
 }
 
-CS_DLLEXPORT bool CS_allocDecoded(struct MarshalledImage* image)
+CS_DLLEXPORT void CS_freeJ2KImage(MarshaledJ2KImage* img)
 {
-    CS_freeImageAlloc(image);
+    if (!img) { return; }
 
-    image->decoded = calloc(image->length, sizeof(unsigned char));
-    if (!image->decoded) { return false; }
+    if (img->data) { free(img->data); }
+    img->length = 0;
 
-    image->encoded = NULL;
-
-    return true;
+    img->width = 0;
+    img->height = 0;
+    img->components = 0;
 }
 
-CS_DLLEXPORT void CS_freeImageAlloc(struct MarshalledImage* image)
-{
-    if (image->encoded)
-    {
-        free(image->encoded);
-        image->encoded = NULL;
-    }
-    if (image->decoded)
-    {
-        free(image->decoded);
-        image->decoded = NULL;
-    }
-}
-
-CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
+CS_DLLEXPORT bool CS_encodeJ2KImage(MarshaledJ2KImage* source, bool lossless, unsigned char* dest, int* dest_len)
 {
     bool retval = false;
     opj_cparameters_t cparameters;
@@ -205,18 +205,18 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     if (lossless)
     {
         cparameters.tcp_numlayers = 1;
-        cparameters.tcp_rates[0] = 0;
+        cparameters.tcp_rates[0] = 0.f;
     }
     else
     {
         cparameters.tcp_numlayers = 5;
-        cparameters.tcp_rates[0] = 1920;
-        cparameters.tcp_rates[1] = 480;
-        cparameters.tcp_rates[2] = 120;
-        cparameters.tcp_rates[3] = 30;
-        cparameters.tcp_rates[4] = 10;
+        cparameters.tcp_rates[0] = 1920.f;
+        cparameters.tcp_rates[1] = 480.f;
+        cparameters.tcp_rates[2] = 120.f;
+        cparameters.tcp_rates[3] = 30.f;
+        cparameters.tcp_rates[4] = 10.f;
         cparameters.irreversible = 1;
-        if (image->components >= 3)
+        if (source->components >= 3)
         {
             cparameters.tcp_mct = 1;
         }
@@ -227,29 +227,29 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     opj_image_cmptparm_t cmpparm[5];
     memset(&cmpparm[0], 0, 5 * sizeof(opj_image_cmptparm_t));
 
-    for (int i = 0; i < image->components; ++i)
+    for (int i = 0; i < source->components; ++i)
     {
         cmpparm[i].prec = 8;
         cmpparm[i].bpp = 8; 
         cmpparm[i].sgnd = 0;
-        cmpparm[i].dx = 1; // *TODO: handle sub-sampling
-        cmpparm[i].dy = 1;
-        cmpparm[i].w = image->width;
-        cmpparm[i].h = image->height;
+        cmpparm[i].dx = cparameters.subsampling_dx;
+        cmpparm[i].dy = cparameters.subsampling_dy;
+        cmpparm[i].w = source->width;
+        cmpparm[i].h = source->height;
     }
 
     // create an opj_image and populate
-    enc_img = opj_image_create(image->components, &cmpparm[0], color_space);
+    enc_img = opj_image_create(source->components, &cmpparm[0], color_space);
     if (enc_img == NULL) { goto cleanup; }
 
     enc_img->x0 = 0;
     enc_img->y0 = 0;
-    enc_img->x1 = image->width;
-    enc_img->y1 = image->height;
-    int imgsize = image->width * image->height;
+    enc_img->x1 = source->width;
+    enc_img->y1 = source->height;
+    int imgsize = source->width * source->height;
 
-    for (int i = 0; i < image->components; ++i) {
-        memcpy(enc_img->comps[i].data, image->decoded + i * imgsize, imgsize);
+    for (int i = 0; i < source->components; ++i) {
+        memcpy(enc_img->comps[i].data, source->data + i * imgsize, imgsize);
     }
     
     // get an encoder handle and setup event handling local context
@@ -264,8 +264,8 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     // open and initialize a bytestream
     opj_buffer_info_t buffer;
     buffer.pos = 0;
-    buffer.data = image->decoded;
-    buffer.size = image->length;
+    buffer.data = source->data;
+    buffer.size = source->length;
     stream = create_buffer_stream(&buffer, OPJ_STREAM_WRITE);
     
     if (!stream) { goto cleanup; }
@@ -276,14 +276,12 @@ CS_DLLEXPORT bool CS_encodeImage(struct MarshalledImage* image, bool lossless)
     res = res && opj_end_compress(codec, stream);
     if (!res) { goto cleanup; }
 
-    image->length = (int)buffer.size;
+    dest = calloc(buffer.size, sizeof(unsigned char));
+    if (!dest) { goto cleanup; }
 
-    unsigned char* alloc = calloc(buffer.size, sizeof(unsigned char));
-    if (!alloc) { goto cleanup; }
+    *dest_len = (int)buffer.size;
 
-    image->encoded = alloc;
-    memcpy(image->encoded, buffer.data, buffer.size);
-    free(alloc);
+    memcpy(&dest[0], buffer.data, buffer.size);
 
     retval = true;
 
@@ -295,7 +293,7 @@ cleanup:
     return retval;
 }
 
-CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
+CS_DLLEXPORT bool CS_decodeJ2KImage(unsigned char* source, int source_len, MarshaledJ2KImage* dest)
 {
     bool retval = false;
     opj_dparameters_t dparameters;
@@ -303,7 +301,6 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     opj_stream_t* stream;
     opj_image_t* dec_img = NULL;
     opj_codestream_info_v2_t* cs_info = NULL;
-    opj_codestream_index_t* cs_index = NULL;
 
     // initialize default decode params
     opj_set_default_decoder_parameters(&dparameters);
@@ -319,17 +316,16 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
 
     // open and initialize a bytestream
     opj_buffer_info_t buffer;
-    memset(&buffer, 0, sizeof(opj_buffer_info_t));
     buffer.pos = 0;
-    buffer.data = image->encoded;
-    buffer.size = image->length;
+    buffer.data = source;
+    buffer.size = source_len;
 
     stream = create_buffer_stream(&buffer, OPJ_STREAM_READ);
     if (!stream) { goto cleanup; }
 
     if (!(opj_read_header(stream, codec, &dec_img) // read in header
         && opj_set_decode_area(codec, dec_img, dparameters.DA_x0, // set full image decode
-            dparameters.DA_y0, dparameters.DA_x1, dparameters.DA_y1))) 
+            dparameters.DA_y0, dparameters.DA_x1, dparameters.DA_y1)))
     {
         goto cleanup;
     }
@@ -338,32 +334,33 @@ CS_DLLEXPORT bool CS_decodeImage(struct MarshalledImage* image)
     {
         goto cleanup; 
     }
-
     // dec_image returns NULL if decode failed.
     if (dec_img == NULL) { goto cleanup; }
 
     // if we've got no components, something went wrong
     if (&dec_img->comps[0] == NULL) { goto cleanup; }
 
-    cs_index = opj_get_cstr_index(codec);
-    if (!cs_index) { goto cleanup; }
-
-    // initialize decoded image struct
+    // initialize decoded image struct, assume all comps have same width, height, and factor
     const OPJ_UINT32 components = dec_img->numcomps;
-    const OPJ_UINT32 width = dec_img->x1 - dec_img->x0;
-    const OPJ_UINT32 height = dec_img->y1 - dec_img->y0;
+    const OPJ_UINT32 factor = dec_img->comps[0].factor;
+    const OPJ_UINT32 width = cs_ceildivpow2(dec_img->x1 - dec_img->x0, factor);
+    const OPJ_UINT32 height = cs_ceildivpow2(dec_img->y1 - dec_img->y0, factor);
     const OPJ_UINT32 pixels = width * height;
 
-    image->components = components;
-    image->width = width;
-    image->height = height;
+    //reinitialize dest just in case
+    CS_freeJ2KImage(dest);
 
-    image->decoded = calloc((size_t)components * pixels, sizeof(OPJ_INT32));
-    if (!image->decoded) { goto cleanup; }
+    dest->components = components;
+    dest->width = width;
+    dest->height = height;
+    dest->length = components * pixels;
+
+    dest->data = calloc((size_t)dest->length, sizeof(OPJ_INT32));
+    if (!dest->data) { goto cleanup; }
 
     for (OPJ_UINT32 comp = 0; comp < components; ++comp)
     {
-        memcpy(&image->decoded[comp * pixels], dec_img->comps[comp].data, pixels);
+        memcpy(&dest->data[comp * pixels], dec_img->comps[comp].data, pixels);
     }
     retval = true;
 
