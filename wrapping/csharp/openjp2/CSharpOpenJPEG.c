@@ -299,7 +299,7 @@ CS_DLLEXPORT bool CS_decodeJ2KImage(unsigned char* source, int source_len, Marsh
     opj_dparameters_t dparameters;
     opj_codec_t* codec;
     opj_stream_t* stream;
-    opj_image_t* dec_img = NULL;
+    opj_image_t* image = NULL;
     opj_codestream_info_v2_t* cs_info = NULL;
 
     // initialize default decode params
@@ -323,29 +323,28 @@ CS_DLLEXPORT bool CS_decodeJ2KImage(unsigned char* source, int source_len, Marsh
     stream = create_buffer_stream(&buffer, OPJ_STREAM_READ);
     if (!stream) { goto cleanup; }
 
-    if (!(opj_read_header(stream, codec, &dec_img) // read in header
-        && opj_set_decode_area(codec, dec_img, dparameters.DA_x0, // set full image decode
+    if (!(opj_read_header(stream, codec, &image) // read in header
+        && opj_set_decode_area(codec, image, dparameters.DA_x0, // set full image decode
             dparameters.DA_y0, dparameters.DA_x1, dparameters.DA_y1)))
     {
         goto cleanup;
     }
-    if (!(opj_decode(codec, stream, dec_img) // decode
+    if (!(opj_decode(codec, stream, image) // decode
         && opj_end_decompress(codec, stream))) //finalize
     {
         goto cleanup; 
     }
     // dec_image returns NULL if decode failed.
-    if (dec_img == NULL) { goto cleanup; }
+    if (image == NULL) { goto cleanup; }
 
     // if we've got no components, something went wrong
-    if (&dec_img->comps[0] == NULL) { goto cleanup; }
+    if (&image->comps[0] == NULL) { goto cleanup; }
 
     // initialize decoded image struct, assume all comps have same width, height, and factor
-    const OPJ_UINT32 components = dec_img->numcomps;
-    const OPJ_UINT32 factor = dec_img->comps[0].factor;
-    const OPJ_UINT32 width = cs_ceildivpow2(dec_img->x1 - dec_img->x0, factor);
-    const OPJ_UINT32 height = cs_ceildivpow2(dec_img->y1 - dec_img->y0, factor);
-    const OPJ_UINT32 pixels = width * height;
+    const OPJ_UINT32 components = image->numcomps;
+    const OPJ_UINT32 factor = image->comps[0].factor;
+    const OPJ_UINT32 width = cs_ceildivpow2(image->x1 - image->x0, factor);
+    const OPJ_UINT32 height = cs_ceildivpow2(image->y1 - image->y0, factor);
 
     //reinitialize dest just in case
     CS_freeJ2KImage(dest);
@@ -353,14 +352,24 @@ CS_DLLEXPORT bool CS_decodeJ2KImage(unsigned char* source, int source_len, Marsh
     dest->components = components;
     dest->width = width;
     dest->height = height;
-    dest->length = components * pixels;
+    dest->length = (int)(components * width * height);
 
     dest->data = calloc((size_t)dest->length, sizeof(OPJ_INT32));
     if (!dest->data) { goto cleanup; }
 
-    for (OPJ_UINT32 comp = 0; comp < components; ++comp)
+    for (OPJ_UINT32 comp = 0, chan = 0; comp < components; ++comp, ++chan)
     {
-        memcpy(&dest->data[comp * pixels], dec_img->comps[comp].data, pixels);
+        if (!image->comps[comp].data) { goto cleanup; }
+
+        OPJ_UINT32 offset = chan;
+        for (OPJ_UINT32 y = 0; y < height; ++y)
+        {
+            for (OPJ_UINT32 x = 0; x < width; ++x)
+            {
+                dest->data[offset] = image->comps[comp].data[y + x];
+                offset += components;
+            }
+        }
     }
     retval = true;
 
@@ -368,7 +377,7 @@ cleanup:
     // cleanup allocations
     opj_stream_destroy(stream);
     opj_destroy_codec(codec);
-    opj_image_destroy(dec_img);
+    opj_image_destroy(image);
 
     return retval;
 }
